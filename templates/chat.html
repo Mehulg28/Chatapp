@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Community Chat</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+        body,
+        html {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+
+        .chat-container {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #messages {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .message-container {
+            max-width: 70%;
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 15px;
+            position: relative;
+        }
+
+        .sent {
+            background-color: #DCF8C6;
+            align-self: flex-end;
+            border-radius: 15px 15px 0 15px;
+        }
+
+        .received {
+            background-color: #FFFFFF;
+            align-self: flex-start;
+            border-radius: 15px 15px 15px 0;
+        }
+
+        .system {
+            background-color: #E8E8E8;
+            align-self: center;
+            border-radius: 15px;
+        }
+
+        .reply-to {
+            background-color: rgba(0, 0, 0, 0.05);
+            border-left: 3px solid #007AFF;
+            padding-left: 10px;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+            cursor: pointer;
+        }
+
+        .message-actions {
+            position: absolute;
+            top: 0;
+            display: none;
+            flex-direction: column;
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .sent .message-actions {
+            left: -40px;
+            right: auto;
+        }
+
+        .received .message-actions {
+            right: -40px;
+            left: auto;
+        }
+
+        #editReplyContext {
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            padding: 0.5rem 1rem;
+            background-color: #f3f4f6;
+            margin-bottom: 0.5rem;
+        }
+
+        #contextType {
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+
+        #contextMessage {
+            flex-grow: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #cancelEditReply {
+            margin-left: 1rem;
+            cursor: pointer;
+        }
+
+        .message-container:hover .message-actions {
+            display: flex;
+        }
+
+        .action-button {
+            padding: 5px 10px;
+            font-size: 0.8em;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .action-button:hover {
+            background-color: #f0f0f0;
+        }
+
+        .poll-sent {
+            align-self: flex-end;
+        }
+
+        .poll-received {
+            align-self: flex-start;
+        }
+
+        .highlight {
+            animation: flash 1s;
+        }
+
+        .hidden {
+            display: none !important;
+            visibility: hidden;
+        }
+
+        @keyframes flash {
+
+            0%,
+            100% {
+                background-color: transparent;
+            }
+
+            50% {
+                background-color: #ffff99;
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100">
+    <div class="chat-container">
+        <h1 class="text-2xl font-bold p-4 bg-blue-500 text-white">Welcome, <span id="userName"></span></h1>
+        <div id="messages" class="bg-white"></div>
+        <div id="editReplyContext" class="hidden">
+            <span id="contextType"></span>
+            <span id="contextMessage"></span>
+            <button id="cancelEditReply">✕</button>
+        </div>
+        <div class="flex space-x-2 p-4 bg-gray-300">
+            <input type="text" id="message" placeholder="Type your message"
+                class="flex-grow px-3 py-2 border rounded-md">
+            <button onclick="sendMessage()" id="sendButton"
+                class="bg-green-500 text-white px-4 py-2 rounded-md hover:bg-green-400 transition duration-300 material-icons">
+                &#xe163;</button> 
+            <button onclick="cancelEdit()" id="cancelButton"
+                class="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition duration-300 hidden">Cancel</button>
+            <button onclick="document.getElementById('imageInput').click()"
+                class="bg-green-500 text-white px-4 py-2 rounded-md hover:bg-green-600 transition duration-300">Photo</button>
+            <input type="file" id="imageInput" accept="image/*" style="display: none;" onchange="sendFile('image')">
+            <button onclick="document.getElementById('videoInput').click()"
+                class="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition duration-300">Video</button>
+            <input type="file" id="videoInput" accept="video/*" style="display: none;" onchange="sendFile('video')">
+            <button onclick="document.getElementById('audioInput').click()"
+                class="bg-yellow-500 text-white px-4 py-2 rounded-md hover:bg-yellow-600 transition duration-300">Audio</button>
+            <input type="file" id="audioInput" accept="audio/*" style="display: none;" onchange="sendFile('audio')">
+            <button onclick="document.getElementById('fileInput').click()"
+                class="bg-purple-500 text-white px-4 py-2 rounded-md hover:bg-purple-600 transition duration-300">File</button>
+            <input type="file" id="fileInput" accept=".doc,.docx,.pdf,.txt" style="display: none;"
+                onchange="sendFile('document')">
+            <button onclick="createPoll()"
+                class="bg-indigo-500 text-white px-4 py-2 rounded-md hover:bg-indigo-600 transition duration-300">Poll</button>
+        </div>
+    </div>
+
+    <script>
+
+        var socket = io({
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+        });
+
+        var currentUserEmail = "";
+        var currentUser = "";
+
+        $(document).ready(function () {
+            $.get('/get_current_user', function (data) {
+                currentUser = data.name;
+                currentUserEmail = data.email;
+                $('#userName').text(currentUser);
+                socket.emit('join', { room: 'main' });
+                loadExistingMessages();
+                loadExistingPolls();
+            });
+        });
+
+        socket.on('message', function (data) {
+            data.is_sent = data.user_email === currentUserEmail;
+            appendMessage(data);
+        });
+
+        socket.on('new_poll', function (data) {
+            appendPoll(data);
+        });
+
+        socket.on('update_poll', function (data) {
+            updatePoll(data);
+        });
+
+        socket.on('message_edited', function (data) {
+            var messageElement = $('.message-container[data-id="' + data.id + '"]');
+            messageElement.find('.message-content').text(data.new_content);
+            messageElement.find('.edited-indicator').removeClass('hidden');
+        });
+
+        function loadExistingMessages() {
+            $.ajax({
+                url: '/get_messages',
+                type: 'GET',
+                success: function (messages) {
+                    messages.forEach(function (message) {
+                        appendMessage(message);
+                    });
+                },
+                error: function (error) {
+                    console.error('Error loading messages:', error);
+                }
+            });
+        }
+
+        function loadExistingPolls() {
+            $.ajax({
+                url: '/get_polls',
+                type: 'GET',
+                success: function (polls) {
+                    polls.forEach(function (poll) {
+                        appendPoll(poll);
+                    });
+                },
+                error: function (error) {
+                    console.error('Error loading polls:', error);
+                }
+            });
+        }
+
+        function escapeSelector(selector) {
+            return selector.replace(/([ #;&,.+*~':"^$!%()\[\]{}|<>\/?])/g, '\\$1');
+        }
+
+        let prevDate = null;
+
+        function appendMessage(data) {
+            const date = new Date(data.timestamp);
+            const currentDateString = date.toLocaleDateString();
+
+            if (prevDate === null || currentDateString !== prevDate.toLocaleDateString()) {
+                prevDate = date;
+                const escapedDateString = escapeSelector(currentDateString);
+
+                if ($('#date-' + escapedDateString).length === 0) {
+                    $('#messages').append(
+                        '<div id="date-' + escapedDateString + '" class="text-center my-2">' +
+                        '<span class="bg-gray-400 text-white px-3 py-1 rounded-full text-sm">' +
+                        currentDateString +
+                        '</span>' +
+                        '</div>'
+                    );
+                }
+            }
+
+            var messageClass = data.user_email === currentUserEmail ? 'sent' : 'received';
+            if (data.user === 'System') return;
+
+            var timeString = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            console.log(timeString)
+
+            var messageHtml = '<div class="message-container ' + messageClass + ' p-2 mb-2" data-id="' + data.id + '">';
+
+            if (data.reply_to) {
+                var replyToElement = $('.message-container[data-id="' + data.reply_to + '"]');
+                var replyToUser = replyToElement.find('.font-bold').first().text().replace(':', '');
+                var replyToContent = replyToElement.find('.message-content').text();
+                var replyToPreview = replyToContent.length > 30 ? replyToContent.substring(0, 30) + '...' : replyToContent;
+                messageHtml += '<div class="reply-to bg-gray-100 p-2 rounded mb-2" onclick="scrollToMessage(\'' + data.reply_to + '\')">';
+                messageHtml += '<strong>' + replyToUser + ':</strong> ' + replyToPreview;
+                messageHtml += '</div>';
+            }
+
+            if (data.user !== 'System') {
+                messageHtml += '<p class="font-bold">' + data.user + ':</p>';
+            }
+
+            switch (data.type) {
+                case 'text':
+                    messageHtml += '<p class="message-content">' + data.message + '</p>';
+                    break;
+                case 'image':
+                    messageHtml += '<img src="/uploads/' + data.message + '" alt="Uploaded Image" class="max-w-full h-auto">';
+                    break;
+                case 'video':
+                    messageHtml += '<video controls class="max-w-full h-auto"><source src="/uploads/' + data.message + '" type="video/mp4">Your browser does not support the video tag.</video>';
+                    break;
+                case 'audio':
+                    messageHtml += '<audio controls><source src="/uploads/' + data.message + '" type="audio/mpeg">Your browser does not support the audio element.</audio>';
+                    break;
+                case 'document':
+                    messageHtml += '<a href="/uploads/' + data.message + '" target="_blank" class="text-blue-500 underline">View Document</a>';
+                    break;
+                default:
+                    messageHtml += '<p class="message-content">Unsupported content type</p>';
+            }
+
+            messageHtml += '<div class="flex justify-between items-center mt-1">';
+            messageHtml += '<span class="edited-indicator text-xs text-gray-500 hidden">(edited)</span>';
+            messageHtml += '<p class="text-xs text-gray-500">' + timeString + '</p>';
+            messageHtml += '</div>';
+
+            messageHtml += '<div class="message-actions">';
+            messageHtml += '<button class="action-button" onclick="replyToMessage(\'' + data.id + '\', \'' + data.message + '\')">Reply</button>';
+            if (data.user_email === currentUserEmail && data.type == 'text') {
+                messageHtml += '<button class="action-button" onclick="editMessage(\'' + data.id + '\')">Edit</button>';
+            }
+            if (data.type == 'text') {
+                messageHtml += '<button class="action-button" onclick="copyMessage(\'' + data.id + '\')">Copy</button>';
+            }
+            messageHtml += '</div>';
+
+            $('#messages').append(messageHtml);
+            $('#messages').scrollTop($('#messages')[0].scrollHeight);
+        }
+
+        function appendPoll(data) {
+            var pollClass = data.user_email === currentUserEmail ? 'poll-sent' : 'poll-received';
+            var pollHtml = '<div id="poll-' + data.poll_id + '" class="message-container ' + pollClass + ' p-2 rounded">';
+            pollHtml += '<h3 class="font-bold">' + data.poll_data.question + '</h3>';
+            for (var i = 0; i < data.poll_data.options.length; i++) {
+                pollHtml += '<button onclick="vote(\'' + data.poll_id + '\', ' + i + ')" class="block mt-2 bg-blue-100 px-3 py-1 rounded hover:bg-blue-200 transition duration-300">' + data.poll_data.options[i] + ': <span id="votes-' + data.poll_id + '-' + i + '">' + (data.poll_data.votes[i] || 0) + '</span></button>';
+            }
+            pollHtml += '<button class="action-button mt-2" onclick="replyToPoll(\'' + data.poll_id + '\', \'' + data.poll_data.question + '\')">Reply</button>';
+            pollHtml += '</div>';
+            $('#messages').append(pollHtml);
+            $('#messages').scrollTop($('#messages')[0].scrollHeight);
+        }
+
+        function updatePoll(data) {
+            for (var i = 0; i < data.poll_data.options.length; i++) {
+                $('#votes-' + data.poll_id + '-' + i).text(data.poll_data.votes[i]);
+            }
+        }
+
+        function sendMessage() {
+            var message = $('#message').val();
+            var editingId = $('#message').data('editing');
+            var replyingToId = $('#message').data('replyingTo');
+
+            if (message.trim() !== '') {
+                if (editingId) {
+                    socket.emit('edit_message', { message_id: editingId, new_content: message });
+                } else {
+                    var messageData = {
+                        room: 'main',
+                        content: message,  // Changed from 'message' to 'content'
+                        type: 'text',
+                        reply_to: replyingToId
+                    };
+                    socket.emit('message', messageData);
+                }
+
+                $('#message').val('');
+                $('#message').data('editing', null);
+                $('#message').data('replyingTo', null);
+                console.log('sent');
+            }
+            cancelEditReply();
+        }
+
+        function replyToMessage(messageId, messageText) {
+            var messageElement = $('.message-container[data-id="' + messageId + '"]');
+            var senderName = messageElement.find('.font-bold').first().text().replace(':', '');
+            var previewText = messageText.length > 30 ? messageText.substring(0, 30) + '...' : messageText;
+
+            $('#contextType').text('Replying to ');
+            $('#contextMessage').html('<strong>' + senderName + ':</strong> ' + previewText);
+            $('#editReplyContext').removeClass('hidden');
+            $('#message').data('replyingTo', messageId);
+            $('#message').focus();
+        }
+
+        function replyToPoll(pollId, question) {
+            var previewText = question.length > 30 ? question.substring(0, 30) + '...' : question;
+
+            $('#contextType').text('Replying to poll: ');
+            $('#contextMessage').text(previewText);
+            $('#editReplyContext').removeClass('hidden');
+            $('#message').data('replyingTo', pollId);
+            $('#message').focus();
+        }
+
+        function editMessage(messageId) {
+            var messageElement = $('.message-container[data-id="' + messageId + '"]');
+            var messageContent = messageElement.find('.message-content').text();
+
+            $('#contextType').text('Editing message');
+            $('#contextMessage').text('');
+            $('#editReplyContext').removeClass('hidden');
+            $('#message').val(messageContent);
+            $('#message').data('editing', messageId);
+            $('#message').focus();
+        }
+
+        function cancelEditReply() {
+            $('#editReplyContext').addClass('hidden');
+            $('#message').data('editing', null);
+            $('#message').data('replyingTo', null);
+        }
+
+        function scrollToMessage(messageId) {
+            var messageElement = $('.message-container[data-id="' + messageId + '"]');
+            if (messageElement.length) {
+                $('#messages').animate({
+                    scrollTop: messageElement.offset().top - $('#messages').offset().top + $('#messages').scrollTop()
+                }, 500);
+                messageElement.addClass('highlight');
+                setTimeout(() => messageElement.removeClass('highlight'), 2000);
+            }
+        }
+
+        function copyMessage(messageId) {
+            var messageElement = $('.message-container[data-id="' + messageId + '"]');
+            var messageContent = messageElement.find('.message-content').text();
+            navigator.clipboard.writeText(messageContent).then(function () {
+                alert('Message copied to clipboard!');
+            }, function (err) {
+                console.error('Could not copy text: ', err);
+            });
+        }
+
+        function createPoll() {
+            var question = prompt("Enter the poll question:");
+            if (question) {
+                var options = [];
+                var option;
+                do {
+                    option = prompt("Enter an option (or cancel to finish):");
+                    if (option) options.push(option);
+                } while (option);
+
+                if (options.length > 1) {
+                    socket.emit('create_poll', {
+                        room: 'main',
+                        question: question,
+                        options: options
+                    });
+                } else {
+                    alert("A poll must have at least two options.");
+                }
+            }
+        }
+
+        function vote(pollId, optionIndex) {
+            socket.emit('vote', {
+                room: 'main',
+                poll_id: pollId,
+                option_index: optionIndex
+            });
+        }
+
+        function sendFile(type) {
+            var fileInput;
+            switch (type) {
+                case 'image':
+                    fileInput = $('#imageInput')[0];
+                    break;
+                case 'video':
+                    fileInput = $('#videoInput')[0];
+                    break;
+                case 'audio':
+                    fileInput = $('#audioInput')[0];
+                    break;
+                case 'document':
+                    fileInput = $('#fileInput')[0];
+                    break;
+            }
+            var file = fileInput.files[0];
+            if (file) {
+                var formData = new FormData();
+                formData.append('file', file);
+
+                $.ajax({
+                    url: '/upload',
+                    type: 'POST',
+                    data: formData,
+                    processData: false,
+                    contentType: false,
+                    success: function (response) {
+                        console.log('File uploaded successfully', response);
+                        // Send a message with the file information
+                        var messageData = {
+                            room: 'main',
+                            content: response.filename,  // Changed from 'message' to 'content'
+                            type: type,
+                            reply_to: $('#message').data('replyingTo')
+                        };
+                        socket.emit('message', messageData);
+                    },
+                    error: function (xhr, status, error) {
+                        console.error('Error uploading file:', error);
+                        alert('Error uploading file: ' + error);
+                    }
+                });
+
+                fileInput.value = '';
+            } else {
+                alert('Please select a file to upload');
+            }
+        }
+
+        $('#message').keypress(function (e) {
+            if (e.which == 13 && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        $('#cancelEditReply').click(function () {
+            cancelEditReply();
+        });
+    </script>
+</body>
+
+</html>
