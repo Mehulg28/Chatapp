@@ -15,6 +15,7 @@ app.config['SECRET_KEY'] = 'your-secret-key'
 app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///chat.db'
 app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 CORS(app)
 Session(app)
 socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
