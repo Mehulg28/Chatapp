@@ -59,12 +59,10 @@ def index():
 def login():
     email = request.form['email']
     name = request.form['name']
-    user = User.query.filter_by(email=email).first()
-    if not user:
-        user = User(email=email, name=name)
-        db.session.add(user)
-        db.session.commit()
-    session['user'] = {'id': user.id, 'email': email, 'name': name}
+    user = supabase.table('users').select('*').eq('email', email).execute()
+    if not user.data:
+        user = supabase.table('users').insert({'email': email, 'name': name}).execute()
+    session['user'] = {'id': user.data[0]['id'], 'email': email, 'name': name}
     return redirect(url_for('chat'))
 
 @app.route('/logout')
