@@ -1,69 +1,84 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory, current_app
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
 from flask_session import Session
 from werkzeug.utils import secure_filename
+from supabase import create_client
 import os
-import json
 import uuid
 from datetime import datetime, timezone
-from flask_migrate import Migrate
+from authlib.integrations.flask_client import OAuth
+from dotenv import load_dotenv
 
+load_dotenv() 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key'
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///chat.db'
 app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
-CORS(app)
+app.config['GOOGLE_CLIENT_ID'] = os.getenv('GOOGLE_CLIENT_ID')
+app.config['GOOGLE_CLIENT_SECRET'] = os.getenv('GOOGLE_CLIENT_SECRET')
+
 Session(app)
 socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
-db = SQLAlchemy(app)
-migrate = Migrate(app, db)
 
-# Create UPLOAD_FOLDER if it doesn't exist
+supabase_url = os.getenv('SUPABASE_URL')
+supabase_key = os.getenv('SUPABASE_KEY')
+supabase = create_client(supabase_url, supabase_key)
+
+oauth = OAuth(app)
+google = oauth.register(
+    name='google',
+    client_id=app.config['GOOGLE_CLIENT_ID'],
+    client_secret=app.config['GOOGLE_CLIENT_SECRET'],
+    userinfo_endpoint='https://www.googleapis.com/oauth2/v3/userinfo',
+    client_kwargs={'scope': 'openid email profile'},
+    server_metadata_url= 'https://accounts.google.com/.well-known/openid-configuration'
+)
+
 if not os.path.exists(app.config['UPLOAD_FOLDER']):
     os.makedirs(app.config['UPLOAD_FOLDER'])
 
-# Database models
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    name = db.Column(db.String(80), nullable=False)
-
-class Message(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    content = db.Column(db.Text, nullable=False)
-    type = db.Column(db.String(20), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    reply_to = db.Column(db.Integer, db.ForeignKey('message.id'))
-    edited = db.Column(db.Boolean, default=False)
-
-class Poll(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    question = db.Column(db.String(255), nullable=False)
-    options = db.Column(db.Text, nullable=False)
-    votes = db.Column(db.Text, nullable=False)
-    user_votes = db.Column(db.Text, nullable=False)  # New column to track user votes
-
-with app.app_context():
-    db.create_all()
-
 @app.route('/')
 def index():
+    if 'user' in session:
+        return redirect(url_for('chat'))
     return render_template('index.html')
 
-@app.route('/login', methods=['POST'])
+@app.route('/login')
 def login():
-    email = request.form['email']
-    name = request.form['name']
-    user = supabase.table('users').select('*').eq('email', email).execute()
-    if not user.data:
-        user = supabase.table('users').insert({'email': email, 'name': name}).execute()
-    session['user'] = {'id': user.data[0]['id'], 'email': email, 'name': name}
-    return redirect(url_for('chat'))
+    if 'user' in session:
+        return redirect(url_for('chat'))
+    google = oauth.create_client('google')
+    redirect_uri = url_for('authorize', _external=True)
+    return google.authorize_redirect(redirect_uri)
+
+# Authorization route
+@app.route('/authorize')
+def authorize():
+    google = oauth.create_client('google')
+    token = google.authorize_access_token()
+
+    userinfo = google.userinfo()
+
+    email = userinfo['email']
+    name = userinfo['name']
+    
+    try:
+        # Check if user exists
+        user = supabase.table('users').select('*').eq('email', email).execute()
+        if not user.data:
+            # If user doesn't exist, create a new one
+            user = supabase.table('users').insert({'email': email, 'name': name}).execute()
+        
+        # Ensure we have user data
+        if user.data:
+            user_data = user.data[0]
+            session['user'] = {'id': user_data['id'], 'email': email, 'name': name}
+            return redirect(url_for('chat'))
+        else:
+            return jsonify({"error": "Failed to create or retrieve user"}), 500
+    except Exception as e:
+        print(f"Error during login: {e}")
+        return jsonify({"error": "Login failed", "details": str(e)}), 500
 
 @app.route('/logout')
 def logout():
@@ -72,67 +87,51 @@ def logout():
 
 @app.route('/chat')
 def chat():
+    print(session)
     if 'user' not in session:
         return redirect(url_for('index'))
+    
     return render_template('chat.html', user=session['user'])
 
 @app.route('/get_current_user')
 def get_current_user():
-    if 'user' in session:
-        return jsonify(session['user'])
-    else:
-        return jsonify({}), 401
+    return jsonify(session.get('user', {}))
 
 @app.route('/get_messages')
 def get_messages():
-    messages = Message.query.order_by(Message.timestamp).all()
-    current_user_email = session['user']['email']
-    return jsonify([{
-        'id': message.id,
-        'user': db.session.get(User, message.user_id).name,
-        'user_id': message.user_id,
-        'user_email': db.session.get(User, message.user_id).email,
-        'message': message.content,
-        'type': message.type,
-        'reply_to': message.reply_to,
-        'timestamp': message.timestamp.isoformat(),
-        'edited': message.edited,
-        'is_sent': db.session.get(User, message.user_id).email == current_user_email
-    } for message in messages])
-
-@app.route('/get_polls')
-def get_polls():
-    polls = Poll.query.all()
-    return jsonify([{
-        'poll_id': poll.id,
-        'poll_data': {
-            'question': poll.question,
-            'options': poll.options.split(','),
-            'votes': [int(v) for v in poll.votes.split(',')]
-        }
-    } for poll in polls])
+    try:
+        messages = supabase.table('messages').select('*').order('timestamp').execute()
+        current_user_email = session['user']['email']
+        return jsonify([{
+            'id': message['id'],
+            'user': message['user_name'],
+            'user_id': message['user_id'],
+            'user_email': message['user_email'],
+            'message': message['content'],
+            'type': message['type'],
+            'reply_to': message['reply_to'],
+            'timestamp': message['timestamp'],
+            'edited': message['edited'],
+            'is_sent': message['user_email'] == current_user_email
+        } for message in messages.data])
+    except Exception as e:
+        print(f"Error fetching messages: {e}")
+        return jsonify({"error": "Failed to fetch messages"}), 500
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
-        app.logger.error("No file part in the request")
         return jsonify({'error': 'No file part'})
     file = request.files['file']
     if file.filename == '':
-        app.logger.error("No selected file")
         return jsonify({'error': 'No selected file'})
     if file:
-        try:
-            filename = secure_filename(file.filename)
-            unique_filename = f"{uuid.uuid4()}_{filename}"
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-            file.save(file_path)
-            app.logger.info(f"File saved successfully: {file_path}")
-            return jsonify({'filename': unique_filename})
-        except Exception as e:
-            app.logger.error(f"Error saving file: {str(e)}")
-            return jsonify({'error': 'Error saving file'}), 500
-        
+        filename = secure_filename(file.filename)
+        unique_filename = f"{uuid.uuid4()}_{filename}"
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+        file.save(file_path)
+        return jsonify({'filename': unique_filename})
+
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
@@ -163,144 +162,70 @@ def on_leave(data):
 
 @socketio.on('message')
 def on_message(data):
+    if 'user' not in session:
+        emit('error', {'message': 'User not authenticated'})
+        return
+
+    user = session['user']
     room = data['room']
-    user = db.session.get(User, session['user']['id'])
-    content = data.get('content') or data.get('message')  # Handle both 'content' and 'message' keys
-    message = Message(
-        user_id=user.id,
-        content=content,
-        type=data['type'],
-        reply_to=data.get('reply_to')
-    )
-    db.session.add(message)
-    db.session.commit()
-    message_data = {
-        'id': message.id,
-        'user': user.name,
-        'user_id': user.id,
-        'user_email': user.email,
-        'message': content,  # Use 'content' here
-        'type': data['type'],
-        'reply_to': data.get('reply_to'),
-        'timestamp': message.timestamp.isoformat(),
-        'edited': False
-    }
-    emit('message', message_data, room=room)
+    content = data.get('content') or data.get('message')
+    message_type = data['type']
+    reply_to = data.get('reply_to')
+
+    try:
+        message = supabase.table('messages').insert({
+            'user_id': user['id'],
+            'user_name': user['name'],
+            'user_email': user['email'],
+            'content': content,
+            'type': message_type,
+            'reply_to': reply_to,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'edited': False
+        }).execute()
+
+        if message.data:
+            message_data = message.data[0]
+            emit('message', {
+                'id': message_data['id'],
+                'user': user['name'],
+                'user_id': user['id'],
+                'user_email': user['email'],
+                'message': content,
+                'type': message_type,
+                'reply_to': reply_to,
+                'timestamp': message_data['timestamp'],
+                'edited': False
+            }, room=room)
+        else:
+            emit('error', {'message': 'Failed to save message'})
+    except Exception as e:
+        print(f"Error saving message: {e}")
+        emit('error', {'message': 'Error saving message'})
 
 @socketio.on('edit_message')
 def on_edit_message(data):
     message_id = data['message_id']
     new_content = data['new_content']
-    message = Message.query.get(message_id)
-    if message and message.user_id == session['user']['id']:
-        message.content = new_content
-        message.edited = True
-        db.session.commit()
-        emit('message_edited', {
-            'id': message.id,
-            'new_content': new_content,
-            'edited': True
-        }, broadcast=True)
-
-@socketio.on('create_poll')
-def on_create_poll(data):
-    poll = Poll(
-        question=data['question'],
-        options=','.join(data['options']),
-        votes=','.join(['0'] * len(data['options'])),
-        user_votes='{}'  # Initialize as empty JSON string
-    )
-    db.session.add(poll)
-    db.session.commit()
-    emit('new_poll', {'poll_id': poll.id, 'poll_data': {
-        'question': poll.question,
-        'options': poll.options.split(','),
-        'votes': [int(v) for v in poll.votes.split(',')]
-    }}, room=data['room'])
-
-@socketio.on('vote')
-def on_vote(data):
-    poll = Poll.query.get(data['poll_id'])
     user_id = session['user']['id']
-    if poll:
-        votes = [int(v) for v in poll.votes.split(',')]
-        user_votes = json.loads(poll.user_votes)
-        
-        # Check if user has already voted
-        if str(user_id) in user_votes:
-            previous_vote = user_votes[str(user_id)]
-            if previous_vote == data['option']:
-                # Retract vote
-                votes[previous_vote] -= 1
-                del user_votes[str(user_id)]
-            else:
-                # Change vote
-                votes[previous_vote] -= 1
-                votes[data['option']] += 1
-                user_votes[str(user_id)] = data['option']
+
+    try:
+        message = supabase.table('messages').update({
+            'content': new_content,
+            'edited': True
+        }).eq('id', message_id).eq('user_id', user_id).execute()
+
+        if message.data:
+            emit('message_edited', {
+                'id': message_id,
+                'new_content': new_content,
+                'edited': True
+            }, broadcast=True)
         else:
-            # New vote
-            votes[data['option']] += 1
-            user_votes[str(user_id)] = data['option']
-        
-        poll.votes = ','.join(map(str, votes))
-        poll.user_votes = json.dumps(user_votes)
-        db.session.commit()
-        emit('update_poll', {'poll_id': poll.id, 'poll_data': {
-            'question': poll.question,
-            'options': poll.options.split(','),
-            'votes': votes
-        }}, room=data['room'])
-
-@socketio.on('add_poll_option')
-def add_poll_option(data):
-    poll = Poll.query.get(data['poll_id'])
-    if poll:
-        options = poll.options.split(',')
-        votes = [int(v) for v in poll.votes.split(',')]
-        options.append(data['new_option'])
-        votes.append(0)
-        poll.options = ','.join(options)
-        poll.votes = ','.join(map(str, votes))
-        db.session.commit()
-        emit('update_poll', {'poll_id': poll.id, 'poll_data': {
-            'question': poll.question,
-            'options': options,
-            'votes': votes
-        }}, room=data['room'])
-
-@socketio.on('delete_poll_option')
-def delete_poll_option(data):
-    poll = Poll.query.get(data['poll_id'])
-    if poll:
-        options = poll.options.split(',')
-        votes = [int(v) for v in poll.votes.split(',')]
-        index = data['option_index']
-        if 0 <= index < len(options):
-            del options[index]
-            del votes[index]
-            poll.options = ','.join(options)
-            poll.votes = ','.join(map(str, votes))
-            user_votes = json.loads(poll.user_votes)
-            # Remove votes for deleted option
-            user_votes = {k: v for k, v in user_votes.items() if int(v) != index}
-            # Adjust remaining votes
-            user_votes = {k: str(int(v) - 1) if int(v) > index else v for k, v in user_votes.items()}
-            poll.user_votes = json.dumps(user_votes)
-            db.session.commit()
-            emit('update_poll', {'poll_id': poll.id, 'poll_data': {
-                'question': poll.question,
-                'options': options,
-                'votes': votes
-            }}, room=data['room'])
-
-@app.errorhandler(404)
-def page_not_found(e):
-    return render_template('404.html'), 404
-
-@app.errorhandler(500)
-def internal_server_error(e):
-    return render_template('500.html'), 500
+            emit('error', {'message': 'Failed to edit message'})
+    except Exception as e:
+        print(f"Error editing message: {e}")
+        emit('error', {'message': 'Error editing message'})
 
 if __name__ == '__main__':
     socketio.run(app, debug=True)
