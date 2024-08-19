@@ -7,8 +7,6 @@ import os
 import uuid
 from datetime import datetime, timezone
 from authlib.integrations.flask_client import OAuth
-from dotenv import load_dotenv
-load_dotenv() 
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
@@ -18,7 +16,7 @@ app.config['GOOGLE_CLIENT_ID'] = os.getenv('GOOGLE_CLIENT_ID')
 app.config['GOOGLE_CLIENT_SECRET'] = os.getenv('GOOGLE_CLIENT_SECRET')
 
 Session(app)
-socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False, ping_timeout=300, ping_interval=25)
+socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
 
 supabase_url = os.getenv('SUPABASE_URL')
 supabase_key = os.getenv('SUPABASE_KEY')
@@ -228,5 +226,4 @@ def on_edit_message(data):
         emit('error', {'message': 'Error editing message'})
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port)
+    socketio.run(app)
