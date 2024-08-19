@@ -8,6 +8,8 @@ import uuid
 from datetime import datetime, timezone
 from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
+from gevent import monkey
+monkey.patch_all()
 
 load_dotenv() 
 app = Flask(__name__)
@@ -18,7 +20,7 @@ app.config['GOOGLE_CLIENT_ID'] = os.getenv('GOOGLE_CLIENT_ID')
 app.config['GOOGLE_CLIENT_SECRET'] = os.getenv('GOOGLE_CLIENT_SECRET')
 
 Session(app)
-socketio = SocketIO(app, cors_allowed_origins="https://community-chatapp.onrender.com", manage_session=False)
+socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*", manage_session=False)
 
 supabase_url = os.getenv('SUPABASE_URL')
 supabase_key = os.getenv('SUPABASE_KEY')
