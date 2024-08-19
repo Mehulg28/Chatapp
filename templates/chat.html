@@ -190,6 +190,9 @@
 
         var socket = io('wss://community-chatapp.onrender.com', {
             transports: ['websocket'],
+            extraHeaders: {
+                'Upgrade': 'websocket'
+            }
         });
 
         var currentUserEmail = "";
