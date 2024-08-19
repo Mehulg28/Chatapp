@@ -188,11 +188,9 @@
 
     <script>
 
-        var socket = io({
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
+        const socket = io('https://community-chatapp.onrender.com', {
+            transports: ['websocket', 'polling'],
+            secure: true
         });
 
         var currentUserEmail = "";
