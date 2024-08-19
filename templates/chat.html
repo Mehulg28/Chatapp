@@ -127,14 +127,6 @@
             background-color: #f0f0f0;
         }
 
-        .poll-sent {
-            align-self: flex-end;
-        }
-
-        .poll-received {
-            align-self: flex-start;
-        }
-
         .highlight {
             animation: flash 1s;
         }
@@ -160,7 +152,10 @@
 
 <body class="bg-gray-100">
     <div class="chat-container">
-        <h1 class="text-2xl font-bold p-4 bg-blue-500 text-white">Welcome, <span id="userName"></span></h1>
+        <div class="flex justify-between bg-blue-500">
+        <h1 class="text-2xl font-bold p-4 text-white">Welcome, <span id="userName"></span></h1>
+        <a href="/logout" class="content-center mx-10 my-2 text-lg text-white bg-red-700 hover:bg-red-800 focus:ring-4 focus:ring-red-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-blue-600 dark:hover:bg-blue-700 focus:outline-none dark:focus:ring-blue-800">Logout</a>
+        </div>
         <div id="messages" class="bg-white"></div>
         <div id="editReplyContext" class="hidden">
             <span id="contextType"></span>
@@ -188,8 +183,6 @@
                 class="bg-purple-500 text-white px-4 py-2 rounded-md hover:bg-purple-600 transition duration-300">File</button>
             <input type="file" id="fileInput" accept=".doc,.docx,.pdf,.txt" style="display: none;"
                 onchange="sendFile('document')">
-            <button onclick="createPoll()"
-                class="bg-indigo-500 text-white px-4 py-2 rounded-md hover:bg-indigo-600 transition duration-300">Poll</button>
         </div>
     </div>
 
@@ -212,21 +205,12 @@
                 $('#userName').text(currentUser);
                 socket.emit('join', { room: 'main' });
                 loadExistingMessages();
-                loadExistingPolls();
             });
         });
 
         socket.on('message', function (data) {
             data.is_sent = data.user_email === currentUserEmail;
             appendMessage(data);
-        });
-
-        socket.on('new_poll', function (data) {
-            appendPoll(data);
-        });
-
-        socket.on('update_poll', function (data) {
-            updatePoll(data);
         });
 
         socket.on('message_edited', function (data) {
@@ -250,21 +234,6 @@
             });
         }
 
-        function loadExistingPolls() {
-            $.ajax({
-                url: '/get_polls',
-                type: 'GET',
-                success: function (polls) {
-                    polls.forEach(function (poll) {
-                        appendPoll(poll);
-                    });
-                },
-                error: function (error) {
-                    console.error('Error loading polls:', error);
-                }
-            });
-        }
-
         function escapeSelector(selector) {
             return selector.replace(/([ #;&,.+*~':"^$!%()\[\]{}|<>\/?])/g, '\\$1');
         }
@@ -275,6 +244,8 @@
             const date = new Date(data.timestamp);
             const currentDateString = date.toLocaleDateString();
 
+            if (data.user === 'System') return;
+            
             if (prevDate === null || currentDateString !== prevDate.toLocaleDateString()) {
                 prevDate = date;
                 const escapedDateString = escapeSelector(currentDateString);
@@ -291,10 +262,8 @@
             }
 
             var messageClass = data.user_email === currentUserEmail ? 'sent' : 'received';
-            if (data.user === 'System') return;
 
             var timeString = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            console.log(timeString)
 
             var messageHtml = '<div class="message-container ' + messageClass + ' p-2 mb-2" data-id="' + data.id + '">';
 
@@ -351,25 +320,6 @@
             $('#messages').scrollTop($('#messages')[0].scrollHeight);
         }
 
-        function appendPoll(data) {
-            var pollClass = data.user_email === currentUserEmail ? 'poll-sent' : 'poll-received';
-            var pollHtml = '<div id="poll-' + data.poll_id + '" class="message-container ' + pollClass + ' p-2 rounded">';
-            pollHtml += '<h3 class="font-bold">' + data.poll_data.question + '</h3>';
-            for (var i = 0; i < data.poll_data.options.length; i++) {
-                pollHtml += '<button onclick="vote(\'' + data.poll_id + '\', ' + i + ')" class="block mt-2 bg-blue-100 px-3 py-1 rounded hover:bg-blue-200 transition duration-300">' + data.poll_data.options[i] + ': <span id="votes-' + data.poll_id + '-' + i + '">' + (data.poll_data.votes[i] || 0) + '</span></button>';
-            }
-            pollHtml += '<button class="action-button mt-2" onclick="replyToPoll(\'' + data.poll_id + '\', \'' + data.poll_data.question + '\')">Reply</button>';
-            pollHtml += '</div>';
-            $('#messages').append(pollHtml);
-            $('#messages').scrollTop($('#messages')[0].scrollHeight);
-        }
-
-        function updatePoll(data) {
-            for (var i = 0; i < data.poll_data.options.length; i++) {
-                $('#votes-' + data.poll_id + '-' + i).text(data.poll_data.votes[i]);
-            }
-        }
-
         function sendMessage() {
             var message = $('#message').val();
             var editingId = $('#message').data('editing');
@@ -391,7 +341,6 @@
                 $('#message').val('');
                 $('#message').data('editing', null);
                 $('#message').data('replyingTo', null);
-                console.log('sent');
             }
             cancelEditReply();
         }
@@ -405,16 +354,6 @@
             $('#contextMessage').html('<strong>' + senderName + ':</strong> ' + previewText);
             $('#editReplyContext').removeClass('hidden');
             $('#message').data('replyingTo', messageId);
-            $('#message').focus();
-        }
-
-        function replyToPoll(pollId, question) {
-            var previewText = question.length > 30 ? question.substring(0, 30) + '...' : question;
-
-            $('#contextType').text('Replying to poll: ');
-            $('#contextMessage').text(previewText);
-            $('#editReplyContext').removeClass('hidden');
-            $('#message').data('replyingTo', pollId);
             $('#message').focus();
         }
 
@@ -451,39 +390,8 @@
             var messageElement = $('.message-container[data-id="' + messageId + '"]');
             var messageContent = messageElement.find('.message-content').text();
             navigator.clipboard.writeText(messageContent).then(function () {
-                alert('Message copied to clipboard!');
             }, function (err) {
                 console.error('Could not copy text: ', err);
-            });
-        }
-
-        function createPoll() {
-            var question = prompt("Enter the poll question:");
-            if (question) {
-                var options = [];
-                var option;
-                do {
-                    option = prompt("Enter an option (or cancel to finish):");
-                    if (option) options.push(option);
-                } while (option);
-
-                if (options.length > 1) {
-                    socket.emit('create_poll', {
-                        room: 'main',
-                        question: question,
-                        options: options
-                    });
-                } else {
-                    alert("A poll must have at least two options.");
-                }
-            }
-        }
-
-        function vote(pollId, optionIndex) {
-            socket.emit('vote', {
-                room: 'main',
-                poll_id: pollId,
-                option_index: optionIndex
             });
         }
 
@@ -515,7 +423,6 @@
                     processData: false,
                     contentType: false,
                     success: function (response) {
-                        console.log('File uploaded successfully', response);
                         // Send a message with the file information
                         var messageData = {
                             room: 'main',
